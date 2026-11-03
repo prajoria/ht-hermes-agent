@@ -881,10 +881,10 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
     admitted = await self._admit_to_live_bot_chat(session_id, user_message, turn_author) if selected_session_id else None
     _retarget_to_delivered_chat(self, launch, admitted)
     if admitted is None and getattr(self.gateway_runner, 'session_authority', None) is not None:
-        remember_run_key(self, run_id, gateway_session_key)  # HT patch P1: read by the drain
-        refused = await _admit_run_to_authority(
-            self, launch, run_id, session_history_delivery, _declared_selected,
-            idempotency_scope, idempotency_key, _openai_error)
+        with remember_run_key(self, run_id, gateway_session_key):  # HT patch P1: read by the drain
+            refused = await _admit_run_to_authority(
+                self, launch, run_id, session_history_delivery, _declared_selected,
+                idempotency_scope, idempotency_key, _openai_error)
         if refused is not None:
             return refused
     self._activate_admitted_request()

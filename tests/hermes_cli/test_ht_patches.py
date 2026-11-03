@@ -142,3 +142,46 @@ def test_gateway_startup_refuses_an_unsupported_combination(home, section, refus
     runner = MagicMock()
     assert GatewayRunner._start_check_ht_patches(runner) is refused
     assert runner._startup_fail_fatal_config.called is refused
+
+
+def test_p1_a_context_copied_in_the_run_loses_the_identity_when_the_run_ends(home, hooks):
+    """Review forks, async delegation and deferred work copy the run's context; once the run's
+    scope exits, their tool calls must carry neither the run id nor the key."""
+    import contextvars
+    from hermes_cli.plugins import invoke_hook
+    _write_config(home, {"p1_run_hook_kwargs": True})
+    with ht_patches.run_hook_scope("run_abc", KEY):
+        copied = contextvars.copy_context()
+        copied.run(invoke_hook, "post_tool_call", tool_name="web_search", args={}, task_id="t1")
+    assert hooks["post_tool_call"][-1]["gateway_session_key"] == KEY  # inside the run: bound
+    copied.run(invoke_hook, "post_tool_call", tool_name="web_search", args={}, task_id="t1")
+    assert not P1_KWARGS & set(hooks["post_tool_call"][-1])
+    assert KEY not in json.dumps(hooks["post_tool_call"][-1], default=str)
+
+
+def test_p1_pre_modify_args_are_kept_per_task(home, hooks):
+    """Two agents in one run (a parent and a subagent) may reuse a model-chosen call id."""
+    from hermes_cli.plugins import invoke_hook
+    _write_config(home, {"p1_run_hook_kwargs": True})
+    with ht_patches.run_hook_scope("run_abc", KEY):
+        invoke_hook("pre_tool_call", tool_name="t", args={"who": "parent"}, task_id="t1", tool_call_id="call_0")
+        invoke_hook("pre_tool_call", tool_name="t", args={"who": "child"}, task_id="t2", tool_call_id="call_0")
+        invoke_hook("post_tool_call", tool_name="t", args={}, task_id="t1", tool_call_id="call_0")
+        invoke_hook("post_tool_call", tool_name="t", args={}, task_id="t2", tool_call_id="call_0")
+    assert [kw["pre_modify_args"] for kw in hooks["post_tool_call"]] == [{"who": "parent"}, {"who": "child"}]
+
+
+@pytest.mark.parametrize("raised", [RuntimeError("store down"), KeyboardInterrupt()])
+def test_p1_an_interrupted_admission_drops_the_held_key(home, raised):
+    """``_handle_runs`` holds the key across ``await _admit_run_to_authority``; a cancelled or
+    failed admission starts no run task to retire it, so the scope drops it."""
+    _write_config(home, {"p1_run_hook_kwargs": True})
+    adapter = MagicMock(_ht_run_hook_keys={})
+    with pytest.raises(type(raised)):
+        with ht_patches.remember_run_key(adapter, "run_abc", KEY):
+            assert adapter._ht_run_hook_keys == {"run_abc": KEY}
+            raise raised
+    assert adapter._ht_run_hook_keys == {}
+    with ht_patches.remember_run_key(adapter, "run_ok", KEY):
+        pass
+    assert adapter._ht_run_hook_keys == {"run_ok": KEY}  # admitted: the run's tables retire it

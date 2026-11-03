@@ -54,7 +54,14 @@ Rules for every patch:
   the parent run's kwargs too; a plugin that binds a credential must still check `task_id` and
   `session_id` (design §7.2: the guard refuses an unknown `task_id`). The key is held in memory
   only, so a run the session authority drains after a gateway restart gets no P1 kwargs (the
-  plugin sees an unbound turn and must fail closed).
+  plugin sees an unbound turn and must fail closed). The identity ends with the run's scope:
+  work that copied the run's context (a review fork, async delegation, deferred work) gets no
+  P1 kwargs after the run ends, though turns the drain runs inside the scope (follow-ups in
+  the same session) do.
+- **Limits:** every plugin tool-hook callback that takes `**kwargs` receives
+  `gateway_session_key`, not only `hlm_harness`; enable only trusted plugins where P1 is on.
+  The flag is read from the active profile's config; in a multiplexed gateway set it in the
+  managed scope (as the HLM image does), not per profile.
 - **Removal criterion:** upstream passes the declared session key (or the run id and request
   metadata) to tool hooks on `/v1/runs` itself, or the HLM Harness plugin stops binding the job
   capability from the hook kwargs (it binds by `task_id` alone, design §7.2). Then drop the flag,

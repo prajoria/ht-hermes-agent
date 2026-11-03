@@ -84,15 +84,20 @@ _run_identity: ContextVar[Optional[dict[str, Any]]] = ContextVar("ht_p1_run_iden
 
 @contextmanager
 def _bind(run_id: str, gateway_session_key: Optional[str]) -> Iterator[None]:
-    token = _run_identity.set({
+    identity = {
         "run_id": run_id,
         "gateway_session_key": gateway_session_key or "",
-        "pre_modify_args": {},  # tool_call_id -> args seen by pre_tool_call, consumed by post_tool_call
-    })
+        # (task_id, tool_call_id) -> args seen by pre_tool_call, consumed by post_tool_call
+        "pre_modify_args": {},
+    }
+    token = _run_identity.set(identity)
     try:
         yield
     finally:
         _run_identity.reset(token)
+        # Contexts copied inside the scope (review forks, async delegation, deferred work) share
+        # this dict: emptying it ends the run's identity, and drops the key, in every copy.
+        identity.clear()
 
 
 def run_hook_scope(run_id: str, gateway_session_key: Optional[str]):
@@ -104,13 +109,21 @@ def run_hook_scope(run_id: str, gateway_session_key: Optional[str]):
     return _bind(run_id, gateway_session_key)
 
 
-def remember_run_key(adapter: Any, run_id: str, gateway_session_key: Optional[str]) -> None:
-    """Hold a run's declared session key in memory for the session-authority drain (P1 on only).
+@contextmanager
+def remember_run_key(adapter: Any, run_id: str, gateway_session_key: Optional[str]) -> Iterator[None]:
+    """Hold a run's declared session key in memory for the session-authority drain (P1 on only),
+    from before its admission (the drain may start during it).
 
     It is never written to the admission row: the key can carry a capability handle. The run's
-    ``_forget_run`` tables include ``_ht_run_hook_keys``, so the entry goes with the run."""
+    ``_forget_run`` tables include ``_ht_run_hook_keys``, so the entry goes with the run; an
+    admission that raises or is cancelled drops it here, since no run task will retire it."""
     if P1 in enabled_patches():
         adapter._ht_run_hook_keys[run_id] = gateway_session_key or ""
+    try:
+        yield
+    except BaseException:
+        adapter._ht_run_hook_keys.pop(run_id, None)
+        raise
 
 
 def admitted_run_scope(adapter: Any, request_id: str):
@@ -124,7 +137,7 @@ def admitted_run_scope(adapter: Any, request_id: str):
 def add_run_hook_kwargs(hook_name: str, kwargs: dict[str, Any]) -> None:
     """Add P1's kwargs to a plugin tool-hook payload when a run identity is bound."""
     identity = _run_identity.get()
-    if identity is None or hook_name not in TOOL_HOOKS:
+    if not identity or hook_name not in TOOL_HOOKS:  # unbound, or its scope has exited
         return
     kwargs["run_id"] = identity["run_id"]
     kwargs["gateway_session_key"] = identity["gateway_session_key"]
@@ -134,9 +147,11 @@ def add_run_hook_kwargs(hook_name: str, kwargs: dict[str, Any]) -> None:
         return
     # The root would be passing pre-modify args through model_tools/tool_executor; this side table
     # keeps the patch out of those upstream files. Entries die with the run's context.
-    pending = identity["pre_modify_args"]
+    # Keyed with task_id too: copies of the context (subagents) share the table, and model-chosen
+    # call ids are not unique across agents.
+    pending, slot = identity["pre_modify_args"], (kwargs.get("task_id"), call_id)
     if hook_name == "pre_tool_call":
         args = kwargs.get("args")
-        pending[call_id] = dict(args) if isinstance(args, dict) else {}
+        pending[slot] = dict(args) if isinstance(args, dict) else {}
     elif hook_name == "post_tool_call":
-        kwargs["pre_modify_args"] = pending.pop(call_id, kwargs.get("args"))
+        kwargs["pre_modify_args"] = pending.pop(slot, kwargs.get("args"))
