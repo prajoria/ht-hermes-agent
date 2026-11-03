@@ -9,10 +9,9 @@ import sys
 
 import pytest
 
-from hermes_cli.ht_patches import TOOL_HOOKS
+from hermes_cli.ht_patches import P1_HOOK_KWARGS as P1_KWARGS, RUN_METADATA, TOOL_HOOKS
 
 KEY = "job-1.a1:htc_0123456789abcdefghijkl"
-P1_KWARGS = {"run_id", "gateway_session_key", "run_metadata", "pre_modify_args"}
 
 
 def _run(tmp_path, *, authority, flag):
@@ -41,7 +40,7 @@ def test_p1_on_tool_hooks_get_the_run_identity(tmp_path, authority):
     for name, kw in calls.items():
         assert kw["run_id"] == receipt["run_id"], name
         assert kw["gateway_session_key"] == KEY, name
-        assert kw["run_metadata"] == {"platform": "api_server", "endpoint": "/v1/runs"}, name
+        assert kw["run_metadata"] == RUN_METADATA, name
         assert kw["session_id"] == "job-1.a1", name
     post = calls["post_tool_call"]
     assert post["args"]["path"] != "MODEL_PATH.txt"  # the hook's modify reached the tool

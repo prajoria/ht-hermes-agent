@@ -15,7 +15,7 @@ import pytest
 from hermes_cli import ht_patches
 from hermes_cli.plugins import PluginManager
 
-P1_KWARGS = {"run_id", "gateway_session_key", "run_metadata", "pre_modify_args"}
+P1_KWARGS = ht_patches.P1_HOOK_KWARGS
 KEY = "job-1.a1:htc_0123456789abcdefghijkl"
 
 
@@ -57,7 +57,7 @@ def _call_tool(dispatched):
         handle_function_call("web_search", {"query": "q"}, task_id="t1", session_id="s1", tool_call_id="call-1")
 
 
-@pytest.mark.parametrize("section", [None, {}, {"p1_run_hook_kwargs": False}, {"p1_run_hook_kwargs": "true"}])
+@pytest.mark.parametrize("section", [None, {}, {"p1_run_hook_kwargs": False}])
 def test_p1_defaults_off(home, hooks, section):
     _write_config(home, section)
     assert ht_patches.check_patch_combination() == frozenset()
@@ -81,7 +81,7 @@ def test_p1_on_tool_hooks_receive_run_identity(home, hooks):
     for name in ht_patches.TOOL_HOOKS:
         (kw,) = hooks[name]
         assert kw["run_id"] == "run_abc" and kw["gateway_session_key"] == KEY, name
-        assert kw["run_metadata"] == {"platform": "api_server", "endpoint": "/v1/runs"}, name
+        assert kw["run_metadata"] == ht_patches.RUN_METADATA, name
         assert kw["task_id"] == "t1" and kw["session_id"] == "s1", name  # upstream kwargs kept
     post = hooks["post_tool_call"][0]
     assert post["args"] == {"query": "q", "secret": "injected"}  # upstream: the modified args
@@ -117,6 +117,8 @@ def test_p1_session_key_never_reaches_shell_hooks_or_webhooks(home):
 @pytest.mark.parametrize("section, message", [
     ({"p1_run_hook_kwargs": True, "p9_unknown": True}, "unknown ht_patches flag"),
     ({"p1_run_hook_kwrags": True}, "unknown ht_patches flag"),
+    ({"p1_run_hook_kwargs": "true"}, "not true/false"),
+    ({"p1_run_hook_kwargs": 1}, "not true/false"),
 ])
 def test_unknown_flag_is_rejected(home, section, message):
     _write_config(home, section)
@@ -133,7 +135,7 @@ def test_untested_combination_is_rejected(home, monkeypatch):
 
 
 @pytest.mark.parametrize("section, refused", [({}, False), ({"p1_run_hook_kwargs": True}, False),
-                                              ({"p1_typo": True}, True)])
+                                              ({"p1_typo": True}, True), ({"p1_run_hook_kwargs": "on"}, True)])
 def test_gateway_startup_refuses_an_unsupported_combination(home, section, refused):
     from gateway.run import GatewayRunner
     _write_config(home, section)

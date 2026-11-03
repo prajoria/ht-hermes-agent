@@ -29,6 +29,7 @@ except ImportError:
 from gateway.platforms.api_server_room_grants import _json_error, _room_grant_error_response
 from gateway.turn_executor import _UnboundedThreadExecutor
 from gateway.platforms.api_server_run_idempotency import TERMINAL_STATUSES
+from hermes_cli.ht_patches import remember_run_key, run_hook_scope  # HT patch P1
 
 
 logger = logging.getLogger("gateway.platforms.api_server")
@@ -880,7 +881,6 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
     admitted = await self._admit_to_live_bot_chat(session_id, user_message, turn_author) if selected_session_id else None
     _retarget_to_delivered_chat(self, launch, admitted)
     if admitted is None and getattr(self.gateway_runner, 'session_authority', None) is not None:
-        from hermes_cli.ht_patches import remember_run_key
         remember_run_key(self, run_id, gateway_session_key)  # HT patch P1: read by the drain
         refused = await _admit_run_to_authority(
             self, launch, run_id, session_history_delivery, _declared_selected,
@@ -948,7 +948,6 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
     effective_task_id = session_id or run.run_id
     # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.
     resets: list[tuple[Any, Callable]] = []
-    from hermes_cli.ht_patches import run_hook_scope
     with self._profile_scope(run.request_profile), run_hook_scope(run.run_id, run.gateway_session_key):
         try:
             # Contextvars, not process env: concurrent runs must not share identity.

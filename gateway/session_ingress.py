@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from gateway.platforms.event import MessageEvent
 from gateway.session_envelope import restore_native
+from hermes_cli.ht_patches import admitted_run_scope  # HT patch P1
 from hermes_state_runtime import RuntimeStoreError
 
 logger = logging.getLogger(__name__)
@@ -291,7 +292,6 @@ async def execute_admission(authority, ref, row):
                 # Committed media resolves under the owning profile's home, like admission did.
                 prepared = prepare_api_execution(authority, ref, row['payload'])
                 api_execution.set(prepared)
-                from hermes_cli.ht_patches import admitted_run_scope
                 run_scope = admitted_run_scope(prepared['adapter'], row['request_id'])  # HT patch P1
                 if isinstance(event.text, list):
                     # The durable transcript keeps the committed media references (the same

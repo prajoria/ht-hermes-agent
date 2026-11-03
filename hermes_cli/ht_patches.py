@@ -31,6 +31,8 @@ PATCH_FLAGS = {P1: "p1_run_hook_kwargs"}
 SUPPORTED_COMBINATIONS = frozenset({frozenset(), frozenset({P1})})
 
 TOOL_HOOKS = frozenset({"pre_tool_call", "post_tool_call", "transform_tool_result"})
+# Every kwarg P1 adds to a tool-hook payload (``pre_modify_args`` on ``post_tool_call`` only).
+P1_HOOK_KWARGS = frozenset({"run_id", "gateway_session_key", "run_metadata", "pre_modify_args"})
 # Kwargs that carry a caller credential: never forwarded to shell hooks or outbound webhooks.
 PRIVATE_HOOK_KWARGS = frozenset({"gateway_session_key"})
 
@@ -59,12 +61,15 @@ def enabled_patches(config: Optional[Mapping[str, Any]] = None) -> frozenset[str
 def check_patch_combination(config: Optional[Mapping[str, Any]] = None) -> frozenset[str]:
     """Return the enabled patches, or raise when the flags are not a tested combination.
 
-    An unknown flag under ``ht_patches:`` is refused too: a typo must not silently run a pin
-    without the patch the deployment asked for."""
+    An unknown flag, or a value that is not a YAML boolean (``"true"`` quoted), is refused too: a
+    typo must not silently run a pin without the patch the deployment asked for."""
     section = _patch_config(config)
     unknown = sorted(set(section) - set(PATCH_FLAGS.values()))
     if unknown:
         raise UnsupportedPatchCombination(f"unknown ht_patches flag(s): {', '.join(map(str, unknown))}")
+    not_bool = sorted(str(flag) for flag, value in section.items() if not isinstance(value, bool))
+    if not_bool:
+        raise UnsupportedPatchCombination(f"ht_patches flag(s) not true/false: {', '.join(not_bool)}")
     enabled = _enabled(section)
     if enabled not in SUPPORTED_COMBINATIONS:
         raise UnsupportedPatchCombination(

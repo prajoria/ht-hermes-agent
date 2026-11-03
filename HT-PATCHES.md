@@ -6,12 +6,14 @@ The HumanTronik patches this fork (`prajoria/ht-hermes-agent`) carries on top of
 
 Rules for every patch:
 
-- One commit, subject prefixed `ht:`. It lands on the fork's integration branch
-  `prajoria/ht-hlm-agent` and reaches `hlm/main` at release. `main` mirrors upstream.
+- One PR per patch, every commit subject prefixed `ht:`. It lands on the fork's integration
+  branch `prajoria/ht-hlm-agent` by fast-forward or merge commit, never squash, so the commit an
+  HT-HLM bump pins stays on the branch; it reaches `hlm/main` at release. `main` mirrors upstream.
 - Additive only, and **off by default** behind a flag under `ht_patches:` in `config.yaml`.
 - Tested with its flag off and on. Every supported combination of flags is listed in
   `SUPPORTED_COMBINATIONS` (`hermes_cli/ht_patches.py`) and tested; the gateway refuses to start
-  (fatal config, exit 78) on any other combination or on an unknown `ht_patches` flag.
+  (fatal config, exit 78) on any other combination, on an unknown `ht_patches` flag, or on a flag
+  value that is not a YAML boolean (a quoted `"true"` would otherwise mean off).
 - Written the way an upstream contribution would be. Nothing is sent upstream without the owner's
   decision.
 - Each entry names its removal criterion.
@@ -50,7 +52,9 @@ Rules for every patch:
 - **Not covered:** other API doors (`/v1/chat/completions`, `/v1/responses`) and non-API platforms
   get no P1 kwargs. A subagent's tool calls run in a copy of the parent's context, so they carry
   the parent run's kwargs too; a plugin that binds a credential must still check `task_id` and
-  `session_id` (design §7.2: the guard refuses an unknown `task_id`).
+  `session_id` (design §7.2: the guard refuses an unknown `task_id`). The key is held in memory
+  only, so a run the session authority drains after a gateway restart gets no P1 kwargs (the
+  plugin sees an unbound turn and must fail closed).
 - **Removal criterion:** upstream passes the declared session key (or the run id and request
   metadata) to tool hooks on `/v1/runs` itself, or the HLM Harness plugin stops binding the job
   capability from the hook kwargs (it binds by `task_id` alone, design §7.2). Then drop the flag,
