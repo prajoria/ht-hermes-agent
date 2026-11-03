@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 # split_command_line, not shlex: shlex eats Windows path backslashes.
 from hermes_cli._subprocess_compat import IS_WINDOWS, kill_process_tree, split_command_line, windows_hide_flags
+from hermes_cli.ht_patches import PRIVATE_HOOK_KWARGS
 
 try:
     import fcntl  # POSIX only; Windows falls back to best-effort without flock.
@@ -98,7 +99,8 @@ def _payload_fields(kwargs: dict[str, Any]) -> dict[str, Any]:
         "cwd": cwd,
         # Resolved at fire time: a multiplexed gateway's hook script must know which profile fired it.
         "profile": get_active_profile_name(),
-        "extra": {k: v for k, v in kwargs.items() if k not in _TOP_LEVEL_PAYLOAD_KEYS},
+        # HT patch P1: a caller credential in the hook payload never leaves the process.
+        "extra": {k: v for k, v in kwargs.items() if k not in _TOP_LEVEL_PAYLOAD_KEYS and k not in PRIVATE_HOOK_KWARGS},
     }
 
 

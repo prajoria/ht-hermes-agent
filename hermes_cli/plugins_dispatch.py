@@ -19,6 +19,7 @@ import types
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
+from hermes_cli.ht_patches import add_run_hook_kwargs
 from hermes_cli.middleware import OBSERVER_SCHEMA_VERSION
 
 logger = logging.getLogger("hermes_cli.plugins")
@@ -289,6 +290,7 @@ class PluginDispatchMixin:
         # unrelated adapter payloads into one monolithic compatibility contract.
         if hook_name != "gateway_platform_event":
             kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
+        add_run_hook_kwargs(hook_name, kwargs)  # HT patch P1 (HT-PATCHES.md)
         return self._run_hook_callbacks(hook_name, self._hooks.get(hook_name, []), kwargs)
 
     def _run_hook_callbacks(self, hook_name: str, callbacks: Any, kwargs: dict[str, Any],
@@ -623,6 +625,7 @@ class PluginDispatchMixin:
         from hermes_cli.plugins import _resolve_hook_callback_timeout
         if hook_name != "gateway_platform_event":
             kwargs.setdefault("telemetry_schema_version", OBSERVER_SCHEMA_VERSION)
+        add_run_hook_kwargs(hook_name, kwargs)  # HT patch P1 (HT-PATCHES.md)
         results: list[Any] = []
         timeout = _resolve_hook_callback_timeout()
         use_timeout = _hook_uses_callback_timeout(hook_name, timeout)

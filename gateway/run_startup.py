@@ -1089,6 +1089,19 @@ class GatewayStartupMixin:
             return True
         return False
 
+    def _start_check_ht_patches(self) -> bool:
+        """HT fork patches (HT-PATCHES.md): an untested flag combination is a fatal config (exit 78)."""
+        from hermes_cli.ht_patches import UnsupportedPatchCombination, check_patch_combination
+        try:
+            enabled = check_patch_combination()
+        except UnsupportedPatchCombination as exc:
+            logger.error("Refusing to start: %s", exc)
+            self._startup_fail_fatal_config(str(exc))
+            return True
+        if enabled:
+            logger.info("HT fork patches enabled: %s", ", ".join(sorted(enabled)))
+        return False
+
     @staticmethod
     def _start_register_plugins_relay_hooks() -> None:
         """Plugin discovery, relay registration and shell-hook/webhook registration. Never raises."""
@@ -1682,7 +1695,7 @@ class GatewayStartupMixin:
         await self._start_log_startup_environment()
         if await self._abort_startup_if_shutdown_requested():
             return True
-        if self._start_check_access_policy():
+        if self._start_check_access_policy() or self._start_check_ht_patches():
             return True
         await self._start_recover_previous_run()
         # Serialize startup restore against inbound: adapters receive as soon as they connect, so inbound

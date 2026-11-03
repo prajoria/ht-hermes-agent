@@ -286,17 +286,21 @@ async def execute_admission(authority, ref, row):
     handed = False
     try:
         with await _execution_scope(authority, home):
+            run_scope = nullcontext()
             if is_api:
                 # Committed media resolves under the owning profile's home, like admission did.
                 prepared = prepare_api_execution(authority, ref, row['payload'])
                 api_execution.set(prepared)
+                from hermes_cli.ht_patches import admitted_run_scope
+                run_scope = admitted_run_scope(prepared['adapter'], row['request_id'])  # HT patch P1
                 if isinstance(event.text, list):
                     # The durable transcript keeps the committed media references (the same
                     # ``[Image attached ...]`` hints native transports persist), not only the caption.
                     event.text = '\n'.join(part['text'] for part in prepared['content'] if part.get('type') == 'text')
                 event.allow_gateway_control = False
                 event.internal = True  # trust comes from the private binding and preclaim, never client JSON
-            response = await authority.runner._handle_message(event)
+            with run_scope:
+                response = await authority.runner._handle_message(event)
             result = captured.get('terminal_result', captured.get('result'))
             if result is None:
                 # No TurnRunner result means the handler answered without executing the turn.

@@ -275,6 +275,8 @@ def _initialize_run_state(self, *, store_factory) -> None:
     self._run_shutdown_requested_at: Optional[float] = None
     # Streaming run id -> its canonical admission id, held while that request observes the turn.
     self._run_admission_aliases: dict[str, str] = {}
+    # HT patch P1: run id -> the caller's X-Hermes-Session-Key, for the authority drain's tool hooks.
+    self._ht_run_hook_keys: dict[str, str] = {}
     (
         self._run_owners, self._run_streams, self._run_streams_created, self._active_run_agents,
         self._active_run_tasks, self._run_statuses, self._run_approval_sessions,
@@ -606,7 +608,7 @@ def _forget_run(self, run_id: str, *tables) -> None:
 def _retire_live_run(self, run_id: str) -> None:
     """Retire agent/task/approval control state once the executor-backed task is done."""
     _forget_run(self, run_id, self._active_run_agents, self._active_run_tasks, self._run_approval_sessions,
-                self._stopping_run_ids, self._shutdown_interrupted_run_ids)
+                self._stopping_run_ids, self._shutdown_interrupted_run_ids, self._ht_run_hook_keys)
 
 
 def _drop_run_transport(self, run_id: str) -> None:
@@ -753,7 +755,7 @@ async def _admit_run_to_authority(
         # retry is refused again instead of replaying a run nobody executes.
         _forget_run(
             self, run_id, self._run_streams, self._run_streams_created, self._run_approval_sessions,
-            self._run_statuses, self._run_owners, self._run_idempotency_ids)
+            self._run_statuses, self._run_owners, self._run_idempotency_ids, self._ht_run_hook_keys)
         if idempotency_key:
             self._run_idempotency_store.forget(idempotency_scope, idempotency_key)
         return store_error_response(_openai_error, exc)
@@ -878,6 +880,8 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
     admitted = await self._admit_to_live_bot_chat(session_id, user_message, turn_author) if selected_session_id else None
     _retarget_to_delivered_chat(self, launch, admitted)
     if admitted is None and getattr(self.gateway_runner, 'session_authority', None) is not None:
+        from hermes_cli.ht_patches import remember_run_key
+        remember_run_key(self, run_id, gateway_session_key)  # HT patch P1: read by the drain
         refused = await _admit_run_to_authority(
             self, launch, run_id, session_history_delivery, _declared_selected,
             idempotency_scope, idempotency_key, _openai_error)
@@ -944,7 +948,8 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
     effective_task_id = session_id or run.run_id
     # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.
     resets: list[tuple[Any, Callable]] = []
-    with self._profile_scope(run.request_profile):
+    from hermes_cli.ht_patches import run_hook_scope
+    with self._profile_scope(run.request_profile), run_hook_scope(run.run_id, run.gateway_session_key):
         try:
             # Contextvars, not process env: concurrent runs must not share identity.
             resets.append((set_current_session_key(run.approval_session_key), reset_current_session_key))
