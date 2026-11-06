@@ -80,7 +80,8 @@ P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run met
 - **What it does:** for an HTTP or SSE MCP server configured with `ssl_verify: <CA path>` (a file
   or a directory) **and** a client certificate (`client_cert`, with or without `client_key`), the
   client builds one `ssl.SSLContext` trusting that CA, loads the client certificate chain into it
-  and passes it to httpx as `verify=` with no `cert=`. Upstream passes the two separately: httpx
+  and passes it to httpx as `verify=` with no `cert=`. The context trusts **only** the configured
+  CA: no system or certifi CAs are loaded, on purpose, as with httpx's own `verify=<path>`. Upstream passes the two separately: httpx
   0.28's `create_ssl_context` returns early for `verify=<str>` and drops `cert=`, and httpx2
   refuses the pair with a `TypeError`, so mTLS to a server behind a private CA (the HLM lab's Envoy
   proxy in front of Harness.Mcp) never presented the client certificate. The runtime's plugin
@@ -92,6 +93,8 @@ P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run met
 - **Not covered:** `ssl_verify: true`/`false` and a CA path without a client certificate keep
   upstream's handling, flag on or off. The deprecated Streamable HTTP API (mcp < 1.24) never sends
   a client certificate. With the flag off the behaviour is upstream's, failure included.
+- **Limits:** the flag is read from the active profile's config; in a multiplexed gateway set it
+  in the managed scope (as the HLM image does for P1), not per profile.
 - **Removal criterion:** upstream httpx or the MCP SDK accepts a CA path together with a client
   certificate, or upstream Hermes builds an `ssl.SSLContext` for MCP TLS itself. Then drop the
   flag, this entry and `_tls_verify`.
