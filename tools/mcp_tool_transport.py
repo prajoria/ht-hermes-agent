@@ -42,6 +42,33 @@ def _present(**kwargs) -> dict:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
+def _tls_verify(ssl_verify, client_cert) -> tuple:
+    """HT patch P4 (``ht_patches.p4_mcp_private_ca``, HT-PATCHES.md): ``(ssl_verify, client_cert)``
+    for the MCP HTTP/SSE transports, resolved once per connect.
+
+    With P4 on, a CA path (file or directory) combined with a client certificate becomes ONE
+    ``ssl.SSLContext`` trusting that CA with the certificate chain loaded, returned as
+    ``ssl_verify`` with ``client_cert=None``: httpx 0.28 returns early for ``verify=<str>`` and
+    silently drops ``cert=`` (httpx2 refuses the pair outright), so mTLS behind a private CA never
+    presented the client certificate. P4 off, or any other combination, returns the pair unchanged
+    (upstream behaviour).
+    """
+    if not isinstance(ssl_verify, str) or not client_cert:
+        return ssl_verify, client_cert
+    from hermes_cli.ht_patches import P4, enabled_patches
+    if P4 not in enabled_patches():
+        return ssl_verify, client_cert
+    import ssl
+    ca_path = os.path.expanduser(ssl_verify)
+    ctx = (ssl.create_default_context(capath=ca_path) if os.path.isdir(ca_path)
+           else ssl.create_default_context(cafile=ca_path))
+    if isinstance(client_cert, str):
+        ctx.load_cert_chain(client_cert)  # combined PEM
+    else:
+        ctx.load_cert_chain(*client_cert)  # (cert, key) or (cert, key, password)
+    return ctx, None
+
+
 def _mcp_proxy_mounts(httpx_mod, url: str, ssl_verify, client_cert, server_name: str = "") -> Optional[dict]:
     """Proxy transports for the caller-owned MCP HTTP client, or ``None`` for a direct connect.
 
@@ -618,7 +645,9 @@ class MCPServerTransportMixin:
         if not any(key.lower() == "mcp-protocol-version" for key in headers):
             headers["mcp-protocol-version"] = _core.LATEST_HANDSHAKE_VERSION
         connect_timeout = config.get("connect_timeout", _core._DEFAULT_CONNECT_TIMEOUT)
-        common = (url, headers, connect_timeout, config.get("ssl_verify", True), _resolve_client_cert(self.name, config),
+        ssl_verify, client_cert = _tls_verify(config.get("ssl_verify", True),  # HT patch P4
+                                              _resolve_client_cert(self.name, config))
+        common = (url, headers, connect_timeout, ssl_verify, client_cert,
                   self._build_oauth_auth(url, config), bool(config.get("strict_redirect_headers")))
         if config.get("transport") == "sse":
             return await self._serve_transport(self._sse_transport(*common), "SSE", float(connect_timeout))

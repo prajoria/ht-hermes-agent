@@ -22,8 +22,13 @@ Rules for every patch:
 
 | Combination | Tests |
 | --- | --- |
-| none (upstream behaviour) | `tests/hermes_cli/test_ht_patches.py`, `tests/gateway/test_ht_p1_run_hook_kwargs.py` (flag unset and `false`) |
-| P1 | the same files, flag `true` |
+| none (upstream behaviour) | `tests/hermes_cli/test_ht_patches.py`, `tests/gateway/test_ht_p1_run_hook_kwargs.py`, `tests/tools/test_mcp_client_private_ca.py` (flags unset and `false`) |
+| P1 | the same files, P1 flag `true` |
+| P4 | `tests/hermes_cli/test_ht_patches.py`, `tests/tools/test_mcp_client_private_ca.py`, P4 flag `true` |
+| P1+P4 | the same files, both flags `true` |
+
+P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run metadata and P3
+`on_write_staged` hook).
 
 ## P1: run id, session key and run metadata in tool hook kwargs
 
@@ -66,3 +71,30 @@ Rules for every patch:
   metadata) to tool hooks on `/v1/runs` itself, or the HLM Harness plugin stops binding the job
   capability from the hook kwargs (it binds by `task_id` alone, design §7.2). Then drop the flag,
   this entry and `hermes_cli/ht_patches.py`'s P1 parts.
+
+## P4: MCP client trusts a private CA and presents the client certificate
+
+- **Issue:** HumanTronik/HT-HLM#641 (FU641 Hermes MCP client: trust a private CA and present the
+  client certificate). Found by #586 (DEMO04); the fix was named by S4 (HTK005, HT-HLM#299).
+- **Flag:** `ht_patches.p4_mcp_private_ca: true` (default off).
+- **What it does:** for an HTTP or SSE MCP server configured with `ssl_verify: <CA path>` (a file
+  or a directory) **and** a client certificate (`client_cert`, with or without `client_key`), the
+  client builds one `ssl.SSLContext` trusting that CA, loads the client certificate chain into it
+  and passes it to httpx as `verify=` with no `cert=`. The context trusts **only** the configured
+  CA: no system or certifi CAs are loaded, on purpose, as with httpx's own `verify=<path>`. Upstream passes the two separately: httpx
+  0.28's `create_ssl_context` returns early for `verify=<str>` and drops `cert=`, and httpx2
+  refuses the pair with a `TypeError`, so mTLS to a server behind a private CA (the HLM lab's Envoy
+  proxy in front of Harness.Mcp) never presented the client certificate. The runtime's plugin
+  seal refuses `SSL_CERT_FILE` and every other trust-store variable (HT-HLM#491), so the CA can
+  only come from the server's own `ssl_verify`.
+- **Where:** `_tls_verify` in `tools/mcp_tool_transport.py`, applied once per connect where the
+  config is read: `_run_http` (Streamable HTTP, SSE, proxy mounts) and the content-type preflight
+  in `tools/mcp_tool_server_run.py`. The transports themselves are unchanged.
+- **Not covered:** `ssl_verify: true`/`false` and a CA path without a client certificate keep
+  upstream's handling, flag on or off. The deprecated Streamable HTTP API (mcp < 1.24) never sends
+  a client certificate. With the flag off the behaviour is upstream's, failure included.
+- **Limits:** the flag is read from the active profile's config; in a multiplexed gateway set it
+  in the managed scope (as the HLM image does for P1), not per profile.
+- **Removal criterion:** upstream httpx or the MCP SDK accepts a CA path together with a client
+  certificate, or upstream Hermes builds an `ssl.SSLContext` for MCP TLS itself. Then drop the
+  flag, this entry and `_tls_verify`.

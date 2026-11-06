@@ -16,6 +16,10 @@ the turn, and the plugin tool hooks (``pre_tool_call``, ``post_tool_call``,
 ``post_tool_call`` also receives ``pre_modify_args``: the arguments as they were before any
 ``pre_tool_call`` ``modify`` directive, so an observer need not see values a hook injected.
 First-party observers never receive these kwargs; only plugin hook callbacks do.
+
+P4 (``ht_patches.p4_mcp_private_ca``): an HTTP/SSE MCP server configured with ``ssl_verify: <CA
+path>`` and a client certificate gets one ``ssl.SSLContext`` trusting that CA with the client
+certificate loaded (``tools.mcp_tool_transport._tls_verify``), so mTLS behind a private CA works.
 """
 
 from __future__ import annotations
@@ -25,10 +29,12 @@ from contextvars import ContextVar
 from typing import Any, Iterator, Mapping, Optional
 
 P1 = "P1"
+P4 = "P4"
 # Patch id -> its flag under ``ht_patches:`` in config.yaml.
-PATCH_FLAGS = {P1: "p1_run_hook_kwargs"}
-# Each combination is exercised by tests/hermes_cli/test_ht_patches.py (and the P1 run tests).
-SUPPORTED_COMBINATIONS = frozenset({frozenset(), frozenset({P1})})
+PATCH_FLAGS = {P1: "p1_run_hook_kwargs", P4: "p4_mcp_private_ca"}
+# Each combination is exercised by tests/hermes_cli/test_ht_patches.py (and the P1 run tests and
+# tests/tools/test_mcp_client_private_ca.py for P4).
+SUPPORTED_COMBINATIONS = frozenset({frozenset(), frozenset({P1}), frozenset({P4}), frozenset({P1, P4})})
 
 TOOL_HOOKS = frozenset({"pre_tool_call", "post_tool_call", "transform_tool_result"})
 # Every kwarg P1 adds to a tool-hook payload (``pre_modify_args`` on ``post_tool_call`` only).
