@@ -26,6 +26,7 @@ Rules for every patch:
 | P1 | the same files, P1 flag `true` |
 | P4 | `tests/hermes_cli/test_ht_patches.py`, `tests/tools/test_mcp_client_private_ca.py`, P4 flag `true` |
 | P1+P4 | the same files, both flags `true` |
+| P5, P1+P5, P4+P5, P1+P4+P5 | `tests/hermes_cli/test_ht_patches.py`, `tests/hermes_cli/test_ht_p5_hook_dispatch.py` (P5 flag `true`, alone and with P1); P5 changes only the `pre_tool_call` dispatcher-error path, which P1 and P4 do not touch |
 
 P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run metadata and P3
 `on_write_staged` hook).
@@ -98,3 +99,31 @@ P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run met
 - **Removal criterion:** upstream httpx or the MCP SDK accepts a CA path together with a client
   certificate, or upstream Hermes builds an `ssl.SSLContext` for MCP TLS itself. Then drop the
   flag, this entry and `_tls_verify`.
+
+## P5: a `pre_tool_call` hook dispatcher error fails closed
+
+- **Issue:** HumanTronik/HT-HLM#698 (FU698 Guard hardening: forbid profile shell hooks that would
+  receive the job capability; dispatcher errors should fail closed). Found by the review of
+  HT-HLM#694 (HTK031 Guard, job-token injection and redaction); owner decision 2026-11-07.
+- **Flag:** `ht_patches.p5_hook_dispatch_fail_closed: true` (default off).
+- **What it does:** when the `pre_tool_call` hook dispatcher itself raises
+  (`hermes_cli.plugins._dispatch_pre_tool_call_hooks`: an import, the directive merge, the approval
+  plumbing), upstream logs the error and runs the tool without the hooks' verdict. With P5 on, the
+  call is refused instead: the model gets a `{"error": "BLOCKED: the pre_tool_call hook dispatcher
+  failed for <tool> (<ErrorType>); the call was refused"}` result and the terminal `post_tool_call`
+  carries `status: "blocked"` and `error_type: "plugin_hook_error"`. The message and the warning log
+  name the error's type only, never its text (it may quote the arguments). A config that cannot be
+  read while handling the error counts as P5 on.
+- **Where:** `refuse_on_hook_dispatch_error` and `HookDispatchRefusal` in `hermes_cli/ht_patches.py`;
+  one call in each place that swallows the dispatcher's error: `_pre_dispatch_guards`
+  (`model_tools.py`), `_pre_tool_block` and its caller's `block_error_type`
+  (`agent/tool_executor.py`, the agent's sequential and concurrent loops) and
+  `_pre_tool_block_message` and `invoke_tool` (`agent/agent_runtime_helpers.py`).
+- **Not covered:** a plugin callback that raises or times out is already blocked upstream
+  (`_policy_error_block_directive`), flag on or off. Other hooks (`post_tool_call`,
+  `transform_tool_result`, middleware) keep upstream's fail-open handling. With the flag off the
+  behaviour is upstream's.
+- **Limits:** the flag is read from the active profile's config on the error path; in a
+  multiplexed gateway set it in the managed scope (as the HLM image does), not per profile.
+- **Removal criterion:** upstream makes a `pre_tool_call` dispatcher error fail closed itself. Then
+  drop the flag, this entry and `refuse_on_hook_dispatch_error`.

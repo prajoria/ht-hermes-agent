@@ -682,8 +682,9 @@ def _pre_tool_block(agent, ref: _ToolCallRef):
             middleware_trace=list(ref.trace),
         )
         return block_msg, (ref.args if modified_args is None else modified_args)
-    except Exception:
-        return None, ref.args
+    except Exception as exc:
+        from hermes_cli.ht_patches import refuse_on_hook_dispatch_error  # HT patch P5
+        return refuse_on_hook_dispatch_error(ref.name, exc), ref.args
 
 
 def _dispatch_authorized_once(
@@ -714,6 +715,7 @@ def _dispatch_authorized_once(
         block_error_type = "plugin_block"
         resolve = lambda: _pre_tool_block(agent, ref)
         block_message, ref.args = resolve() if authorization_gate is None else authorization_gate.run(resolve)
+        block_error_type = getattr(block_message, "error_type", block_error_type)  # HT patch P5
         state.args = ref.args
     block_body = None if block_message is None else {"error": block_message}
 

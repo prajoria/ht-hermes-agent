@@ -2499,8 +2499,9 @@ def _pre_tool_block_message(agent, function_name, function_args, effective_task_
             middleware_trace=list(middleware_trace),
         )
         return block_message, (modified_args if modified_args is not None else function_args)
-    except Exception:
-        return None, function_args
+    except Exception as exc:
+        from hermes_cli.ht_patches import refuse_on_hook_dispatch_error  # HT patch P5
+        return refuse_on_hook_dispatch_error(function_name, exc), function_args
 
 
 def invoke_tool(agent, function_name: str, function_args: dict, effective_task_id: str,
@@ -2538,8 +2539,8 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
         emit_terminal_post_tool_call(
             agent, function_name=function_name, function_args=function_args, result=result,
             effective_task_id=effective_task_id, tool_call_id=tool_call_id, status="blocked",
-            error_type="plugin_block", error_message=block_message,
-            middleware_trace=_tool_middleware_trace,
+            error_type=getattr(block_message, "error_type", "plugin_block"),  # HT patch P5
+            error_message=block_message, middleware_trace=_tool_middleware_trace,
         )
         return result
     tool_start_time = time.monotonic()
