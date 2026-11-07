@@ -20,27 +20,41 @@ First-party observers never receive these kwargs; only plugin hook callbacks do.
 P4 (``ht_patches.p4_mcp_private_ca``): an HTTP/SSE MCP server configured with ``ssl_verify: <CA
 path>`` and a client certificate gets one ``ssl.SSLContext`` trusting that CA with the client
 certificate loaded (``tools.mcp_tool_transport._tls_verify``), so mTLS behind a private CA works.
+
+P5 (``ht_patches.p5_hook_dispatch_fail_closed``): when the ``pre_tool_call`` hook dispatcher itself
+raises (not a plugin callback: upstream already blocks on those), the tool call is refused with a
+``plugin_hook_error`` block instead of running unguarded (``refuse_on_hook_dispatch_error``).
 """
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import Any, Iterator, Mapping, Optional
 
 P1 = "P1"
 P4 = "P4"
+P5 = "P5"
 # Patch id -> its flag under ``ht_patches:`` in config.yaml.
-PATCH_FLAGS = {P1: "p1_run_hook_kwargs", P4: "p4_mcp_private_ca"}
+PATCH_FLAGS = {P1: "p1_run_hook_kwargs", P4: "p4_mcp_private_ca", P5: "p5_hook_dispatch_fail_closed"}
 # Each combination is exercised by tests/hermes_cli/test_ht_patches.py (and the P1 run tests and
-# tests/tools/test_mcp_client_private_ca.py for P4).
-SUPPORTED_COMBINATIONS = frozenset({frozenset(), frozenset({P1}), frozenset({P4}), frozenset({P1, P4})})
+# tests/tools/test_mcp_client_private_ca.py for P4, tests/hermes_cli/test_ht_p5_hook_dispatch.py
+# for P5). P5 touches only the pre_tool_call error path, so it is tested with each of the others.
+SUPPORTED_COMBINATIONS = frozenset(
+    base | extra
+    for base in (frozenset(), frozenset({P1}), frozenset({P4}), frozenset({P1, P4}))
+    for extra in (frozenset(), frozenset({P5}))
+)
 
 TOOL_HOOKS = frozenset({"pre_tool_call", "post_tool_call", "transform_tool_result"})
 # Every kwarg P1 adds to a tool-hook payload (``pre_modify_args`` on ``post_tool_call`` only).
 P1_HOOK_KWARGS = frozenset({"run_id", "gateway_session_key", "run_metadata", "pre_modify_args"})
 # Kwargs that carry a caller credential: never forwarded to shell hooks or outbound webhooks.
 PRIVATE_HOOK_KWARGS = frozenset({"gateway_session_key"})
+
+
+logger = logging.getLogger(__name__)
 
 
 class UnsupportedPatchCombination(RuntimeError):
@@ -161,3 +175,33 @@ def add_run_hook_kwargs(hook_name: str, kwargs: dict[str, Any]) -> None:
         pending[slot] = dict(args) if isinstance(args, dict) else {}
     elif hook_name == "post_tool_call":
         kwargs["pre_modify_args"] = pending.pop(slot, kwargs.get("args"))
+
+
+# P5: the error type a refused call carries (the post_tool_call ``error_type`` and the block body).
+HOOK_DISPATCH_ERROR = "plugin_hook_error"
+
+
+class HookDispatchRefusal(str):
+    """P5's block message; ``error_type`` tells a caller the refusal from a plugin's own block."""
+
+    error_type = HOOK_DISPATCH_ERROR
+
+
+def refuse_on_hook_dispatch_error(tool_name: str, error: BaseException) -> Optional[HookDispatchRefusal]:
+    """The block for a ``pre_tool_call`` dispatcher that raised, or ``None`` (upstream: the call
+    proceeds without the hooks' verdict) while P5 is off.
+
+    A config that cannot be read counts as P5 on: the guard did not run, so the call does not
+    either. The message and the log name the error's type only, never its text, which may quote
+    the tool arguments."""
+    try:
+        on = P5 in enabled_patches()
+    except Exception:  # noqa: BLE001 -- unreadable config: fail closed
+        on = True
+    if not on:
+        return None
+    logger.warning("pre_tool_call hook dispatch failed for %s (%s); call refused (HT patch P5)",
+                   tool_name, type(error).__name__)
+    return HookDispatchRefusal(
+        f"BLOCKED: the pre_tool_call hook dispatcher failed for {tool_name} ({type(error).__name__}); "
+        "the call was refused")

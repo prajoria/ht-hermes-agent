@@ -777,6 +777,10 @@ def _pre_dispatch_guards(function_name: str, function_args: dict[str, Any], skip
                 function_args = modified_args
         except Exception as _hook_err:
             logger.debug("pre_tool_call hook error: %s", _hook_err)
+            from hermes_cli.ht_patches import refuse_on_hook_dispatch_error  # HT patch P5
+            refusal = refuse_on_hook_dispatch_error(function_name, _hook_err)
+            if refusal is not None:
+                return function_args, (tool_error(refusal), refusal.error_type, refusal)
         if block_message is not None:
             return function_args, (tool_error(block_message), "plugin_block", block_message)
 

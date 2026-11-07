@@ -122,6 +122,7 @@ def test_p1_session_key_never_reaches_shell_hooks_or_webhooks(home):
     ({"p4_mcp_private_ca": True, "p9_unknown": True}, "unknown ht_patches flag"),
     ({"p4_mcp_privat_ca": True}, "unknown ht_patches flag"),
     ({"p4_mcp_private_ca": "true"}, "not true/false"),
+    ({"p5_hook_dispatch_fail_closed": "true"}, "not true/false"),
 ])
 def test_unknown_flag_is_rejected(home, section, message):
     _write_config(home, section)
@@ -133,9 +134,15 @@ def test_unknown_flag_is_rejected(home, section, message):
     (None, set()), ({}, set()), ({"p1_run_hook_kwargs": False, "p4_mcp_private_ca": False}, set()),
     ({"p1_run_hook_kwargs": True}, {"P1"}), ({"p4_mcp_private_ca": True}, {"P4"}),
     ({"p1_run_hook_kwargs": True, "p4_mcp_private_ca": True}, {"P1", "P4"}),
+    ({"p5_hook_dispatch_fail_closed": True}, {"P5"}),
+    ({"p1_run_hook_kwargs": True, "p5_hook_dispatch_fail_closed": True}, {"P1", "P5"}),
+    ({"p4_mcp_private_ca": True, "p5_hook_dispatch_fail_closed": True}, {"P4", "P5"}),
+    ({"p1_run_hook_kwargs": True, "p4_mcp_private_ca": True, "p5_hook_dispatch_fail_closed": True},
+     {"P1", "P4", "P5"}),
 ])
 def test_every_supported_combination_is_accepted(home, section, enabled):
-    """none, P1, P4 and P1+P4 (P4's behaviour under each: tests/tools/test_mcp_client_private_ca.py)."""
+    """Every combination of P1, P4 and P5 (P4's behaviour under each:
+    tests/tools/test_mcp_client_private_ca.py; P5's: tests/hermes_cli/test_ht_p5_hook_dispatch.py)."""
     _write_config(home, section)
     assert ht_patches.check_patch_combination() == frozenset(enabled)
 
@@ -152,7 +159,11 @@ def test_untested_combination_is_rejected(home, monkeypatch):
                                               ({"p4_mcp_private_ca": True}, False),
                                               ({"p1_run_hook_kwargs": True, "p4_mcp_private_ca": True}, False),
                                               ({"p1_typo": True}, True), ({"p1_run_hook_kwargs": "on"}, True),
-                                              ({"p4_typo": True}, True), ({"p4_mcp_private_ca": "on"}, True)])
+                                              ({"p4_typo": True}, True), ({"p4_mcp_private_ca": "on"}, True),
+                                              ({"p1_run_hook_kwargs": True, "p5_hook_dispatch_fail_closed": True},
+                                               False),
+                                              ({"p5_typo": True}, True),
+                                              ({"p5_hook_dispatch_fail_closed": "on"}, True)])
 def test_gateway_startup_refuses_an_unsupported_combination(home, section, refused):
     from gateway.run import GatewayRunner
     _write_config(home, section)
