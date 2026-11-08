@@ -27,6 +27,7 @@ Rules for every patch:
 | P4 | `tests/hermes_cli/test_ht_patches.py`, `tests/tools/test_mcp_client_private_ca.py`, P4 flag `true` |
 | P1+P4 | the same files, both flags `true` |
 | P5, P1+P5, P4+P5, P1+P4+P5 | `tests/hermes_cli/test_ht_patches.py`, `tests/hermes_cli/test_ht_p5_hook_dispatch.py` (P5 flag `true`, alone and with P1); P5 changes only the `pre_tool_call` dispatcher-error path, which P1 and P4 do not touch |
+| each of the above with P6 | `tests/hermes_cli/test_ht_patches.py`, `tests/hermes_cli/test_ht_p6_transform_fail_closed.py` (P6 flag `true`, alone and with P1+P5); P6 changes only the `transform_tool_result` failure path |
 
 P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run metadata and P3
 `on_write_staged` hook).
@@ -127,3 +128,58 @@ P2 and P3 are reserved by HumanTronik/HT-HLM#304 (HTK010 fork patches P2 run met
   multiplexed gateway set it in the managed scope (as the HLM image does), not per profile.
 - **Removal criterion:** upstream makes a `pre_tool_call` dispatcher error fail closed itself. Then
   drop the flag, this entry and `refuse_on_hook_dispatch_error`.
+
+## P6: a failed `transform_tool_result` withholds the tool result
+
+- **Issue:** HumanTronik/HT-HLM#787 (FU787 Hermes fails open on other hook and middleware errors),
+  a follow-up of P5 (HT-HLM#698).
+- **Flag:** `ht_patches.p6_tool_result_transform_fail_closed: true` (default off).
+- **Why:** `transform_tool_result` is where a plugin can rewrite a tool result before the model
+  reads it, and the HLM Harness plugin redacts the job capability there (Hermes's own redaction
+  does not cover tool results, HT-HLM spike S1). Upstream skips that step silently when it fails,
+  so a server that echoed the capability would put it in the model's context.
+- **What it does:** with P6 on, the tool result is replaced by
+  `{"error": "BLOCKED: the transform_tool_result hook failed for <tool> (<reason>); the result was withheld"}`
+  when any `transform_tool_result` callback
+  - raises (`<reason>` is the error's type, never its text),
+  - times out under `plugins.hook_callback_timeout`, or is skipped because it is still running
+    for that call, is in the suppression window after a timeout, or has reached the
+    abandoned-worker cap (`timed out or skipped`),
+  - or the transform step itself raises (`_apply_transform_tool_result_hook`,
+    `apply_transform_tool_result`) while a `transform_tool_result` callback is registered.
+
+  A withheld result wins over any other callback's string return (upstream takes the first
+  string). With no callback registered, or with the flag off, the behaviour is upstream's. A
+  config that cannot be read on that path counts as P6 on.
+- **Where:** `withhold_on_transform_failure`, `withhold_on_transform_error`,
+  `pick_transform_result` and `ResultWithheld` in `hermes_cli/ht_patches.py`; calls in
+  `PluginManager._run_hook_callbacks` and `ainvoke_hook` (`hermes_cli/plugins_dispatch.py`),
+  `_apply_transform_tool_result_hook` (`model_tools.py`) and `apply_transform_tool_result`
+  (`agent/inline_tool_executors.py`). Every tool path reaches one of the last two: registry tools
+  inside `handle_function_call`, the agent loops and `AIAgent._invoke_tool` for inline tools.
+- **Not covered:** the terminal `post_tool_call` fires before the transform, so it does not carry
+  the withholding; the warning log does. A tool whose execution timed out gets Hermes's own timeout
+  result, which no transform sees, flag on or off.
+- **Limits:** the flag is read from the active profile's config on the failure path; in a
+  multiplexed gateway set it in the managed scope (as the HLM image does), not per profile.
+- **Removal criterion:** upstream fails `transform_tool_result` closed itself, or the HLM Harness
+  plugin stops redacting tool results there. Then drop the flag, this entry and the P6 helpers.
+
+## Paths that stay fail-open (reviewed for HT-HLM#787)
+
+P5 and P6 close the two hook paths that protect data in the HLM configuration (the plugin's
+guard and its tool-result redaction). These stay fail-open on purpose:
+
+- **`tool_request` middleware** (`model_tools.py` `_apply_request_middleware`,
+  `agent/agent_runtime_helpers.py` `invoke_tool`): an error keeps the unmodified arguments. The
+  HLM image registers no middleware (the `hlm_harness` plugin registers none and is the only
+  enabled plugin), and the `pre_tool_call` guard still runs on the arguments afterwards.
+- **`tool_execution` middleware and the NeMo Relay path**: nothing registers them in the HLM image
+  and Relay is not configured.
+- **`post_tool_call`** (`model_tools.py` `_emit_post_tool_call_hook` and the agent's terminal
+  emit): observers only; the `hlm_harness` plugin registers none. A failure costs an observation
+  (and leaves P1's per-run `pre_modify_args` entry, which ends with the run), not a protection.
+- **Redaction-pattern registration** (`PluginContext.register_redaction_patterns`): a failure
+  warns and registers no pattern, once at startup rather than per call. Log redaction then
+  misses the plugin's patterns; the HLM image build's leak scan (HT-HLM `tools/hermes_p1_probe.py`:
+  logs, SSE stream and every file of the Hermes home) fails the build if a capability reaches one.

@@ -24,10 +24,18 @@ certificate loaded (``tools.mcp_tool_transport._tls_verify``), so mTLS behind a 
 P5 (``ht_patches.p5_hook_dispatch_fail_closed``): when the ``pre_tool_call`` hook dispatcher itself
 raises (not a plugin callback: upstream already blocks on those), the tool call is refused with a
 ``plugin_hook_error`` block instead of running unguarded (``refuse_on_hook_dispatch_error``).
+
+P6 (``ht_patches.p6_tool_result_transform_fail_closed``): when a ``transform_tool_result`` callback
+raises, times out or is skipped (still running, suppressed after a timeout, abandoned-worker cap),
+or the transform step itself raises, the tool result is withheld instead of reaching the model
+untransformed (``withhold_on_transform_failure``, ``withhold_on_transform_error``,
+``pick_transform_result``). A transform that redacts (the HLM Harness plugin strips the job
+capability there) must not be skipped silently.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -36,15 +44,24 @@ from typing import Any, Iterator, Mapping, Optional
 P1 = "P1"
 P4 = "P4"
 P5 = "P5"
+P6 = "P6"
 # Patch id -> its flag under ``ht_patches:`` in config.yaml.
-PATCH_FLAGS = {P1: "p1_run_hook_kwargs", P4: "p4_mcp_private_ca", P5: "p5_hook_dispatch_fail_closed"}
+PATCH_FLAGS = {
+    P1: "p1_run_hook_kwargs",
+    P4: "p4_mcp_private_ca",
+    P5: "p5_hook_dispatch_fail_closed",
+    P6: "p6_tool_result_transform_fail_closed",
+}
 # Each combination is exercised by tests/hermes_cli/test_ht_patches.py (and the P1 run tests and
 # tests/tools/test_mcp_client_private_ca.py for P4, tests/hermes_cli/test_ht_p5_hook_dispatch.py
-# for P5). P5 touches only the pre_tool_call error path, so it is tested with each of the others.
+# for P5, tests/hermes_cli/test_ht_p6_transform_fail_closed.py for P6). P5 touches only the
+# pre_tool_call error path and P6 only the transform_tool_result failure path, so each is tested
+# with each of the others.
 SUPPORTED_COMBINATIONS = frozenset(
-    base | extra
+    base | p5 | p6
     for base in (frozenset(), frozenset({P1}), frozenset({P4}), frozenset({P1, P4}))
-    for extra in (frozenset(), frozenset({P5}))
+    for p5 in (frozenset(), frozenset({P5}))
+    for p6 in (frozenset(), frozenset({P6}))
 )
 
 TOOL_HOOKS = frozenset({"pre_tool_call", "post_tool_call", "transform_tool_result"})
@@ -205,3 +222,61 @@ def refuse_on_hook_dispatch_error(tool_name: str, error: BaseException) -> Optio
     return HookDispatchRefusal(
         f"BLOCKED: the pre_tool_call hook dispatcher failed for {tool_name} ({type(error).__name__}); "
         "the call was refused")
+
+
+# P6: the hook whose failures withhold the result, and the withheld result.
+TRANSFORM_HOOK = "transform_tool_result"
+
+
+class ResultWithheld(str):
+    """P6's replacement result (a JSON ``{"error": ...}`` string); it wins over any other
+    ``transform_tool_result`` return."""
+
+    error_type = HOOK_DISPATCH_ERROR
+
+
+def _p6_on() -> bool:
+    try:
+        return P6 in enabled_patches()
+    except Exception:  # noqa: BLE001 -- unreadable config: fail closed
+        return True
+
+
+def _withhold(tool_name: Any, reason: str) -> ResultWithheld:
+    logger.warning("transform_tool_result failed for %s (%s); result withheld (HT patch P6)",
+                   tool_name, reason)
+    message = (f"BLOCKED: the transform_tool_result hook failed for {tool_name} ({reason}); "
+               "the result was withheld")
+    return ResultWithheld(json.dumps({"error": message}, ensure_ascii=False))
+
+
+def withhold_on_transform_failure(hook_name: str, kwargs: Mapping[str, Any], reason: str
+                                  ) -> Optional[ResultWithheld]:
+    """P6, per callback: the withheld result for a ``transform_tool_result`` callback that raised
+    (``reason`` = the error's type) or timed out / was skipped; ``None`` for any other hook or
+    while P6 is off (upstream: the callback is skipped and the result passes untransformed)."""
+    if hook_name != TRANSFORM_HOOK or not _p6_on():
+        return None
+    return _withhold(kwargs.get("tool_name"), reason)
+
+
+def withhold_on_transform_error(tool_name: str, error: BaseException) -> Optional[ResultWithheld]:
+    """P6, the transform step itself raised: the withheld result, or ``None`` while P6 is off or
+    no ``transform_tool_result`` callback is registered (nothing would have transformed it)."""
+    if not _p6_on():
+        return None
+    try:
+        from hermes_cli.lifecycle import has_hook
+        if not has_hook(TRANSFORM_HOOK):
+            return None
+    except Exception:  # noqa: BLE001 -- cannot tell: a transform may be registered
+        pass
+    return _withhold(tool_name, type(error).__name__)
+
+
+def pick_transform_result(hook_results: Any, result: Any) -> Any:
+    """The result after ``transform_tool_result``: a P6 withheld result if any callback failed,
+    else upstream's first string return, else ``result``."""
+    strings = [r for r in hook_results if isinstance(r, str)]
+    withheld = [r for r in strings if isinstance(r, ResultWithheld)]
+    return withheld[0] if withheld else (strings[0] if strings else result)
