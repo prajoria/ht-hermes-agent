@@ -81,8 +81,10 @@ def apply_transform_tool_result(
             function_name, function_args, result, duration_ms,
             _CallIds(**tool_hook_ids(agent, effective_task_id, tool_call_id)),
         )
-    except Exception:
-        return result
+    except Exception as exc:
+        from hermes_cli.ht_patches import withhold_on_transform_error  # HT patch P6
+        withheld = withhold_on_transform_error(function_name, exc)
+        return result if withheld is None else withheld
 
 
 @dataclass

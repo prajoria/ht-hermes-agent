@@ -123,6 +123,7 @@ def test_p1_session_key_never_reaches_shell_hooks_or_webhooks(home):
     ({"p4_mcp_privat_ca": True}, "unknown ht_patches flag"),
     ({"p4_mcp_private_ca": "true"}, "not true/false"),
     ({"p5_hook_dispatch_fail_closed": "true"}, "not true/false"),
+    ({"p6_tool_result_transform_fail_closed": "true"}, "not true/false"),
 ])
 def test_unknown_flag_is_rejected(home, section, message):
     _write_config(home, section)
@@ -139,10 +140,19 @@ def test_unknown_flag_is_rejected(home, section, message):
     ({"p4_mcp_private_ca": True, "p5_hook_dispatch_fail_closed": True}, {"P4", "P5"}),
     ({"p1_run_hook_kwargs": True, "p4_mcp_private_ca": True, "p5_hook_dispatch_fail_closed": True},
      {"P1", "P4", "P5"}),
+    ({"p6_tool_result_transform_fail_closed": True}, {"P6"}),
+    ({"p1_run_hook_kwargs": True, "p6_tool_result_transform_fail_closed": True}, {"P1", "P6"}),
+    ({"p4_mcp_private_ca": True, "p6_tool_result_transform_fail_closed": True}, {"P4", "P6"}),
+    ({"p5_hook_dispatch_fail_closed": True, "p6_tool_result_transform_fail_closed": True}, {"P5", "P6"}),
+    ({"p1_run_hook_kwargs": True, "p5_hook_dispatch_fail_closed": True,
+      "p6_tool_result_transform_fail_closed": True}, {"P1", "P5", "P6"}),
+    ({"p1_run_hook_kwargs": True, "p4_mcp_private_ca": True, "p5_hook_dispatch_fail_closed": True,
+      "p6_tool_result_transform_fail_closed": True}, {"P1", "P4", "P5", "P6"}),
 ])
 def test_every_supported_combination_is_accepted(home, section, enabled):
-    """Every combination of P1, P4 and P5 (P4's behaviour under each:
-    tests/tools/test_mcp_client_private_ca.py; P5's: tests/hermes_cli/test_ht_p5_hook_dispatch.py)."""
+    """Combinations of P1, P4, P5 and P6 (P4's behaviour under each:
+    tests/tools/test_mcp_client_private_ca.py; P5's: tests/hermes_cli/test_ht_p5_hook_dispatch.py;
+    P6's: tests/hermes_cli/test_ht_p6_transform_fail_closed.py)."""
     _write_config(home, section)
     assert ht_patches.check_patch_combination() == frozenset(enabled)
 
@@ -163,7 +173,11 @@ def test_untested_combination_is_rejected(home, monkeypatch):
                                               ({"p1_run_hook_kwargs": True, "p5_hook_dispatch_fail_closed": True},
                                                False),
                                               ({"p5_typo": True}, True),
-                                              ({"p5_hook_dispatch_fail_closed": "on"}, True)])
+                                              ({"p5_hook_dispatch_fail_closed": "on"}, True),
+                                              ({"p1_run_hook_kwargs": True, "p5_hook_dispatch_fail_closed": True,
+                                                "p6_tool_result_transform_fail_closed": True}, False),
+                                              ({"p6_typo": True}, True),
+                                              ({"p6_tool_result_transform_fail_closed": "on"}, True)])
 def test_gateway_startup_refuses_an_unsupported_combination(home, section, refused):
     from gateway.run import GatewayRunner
     _write_config(home, section)

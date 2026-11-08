@@ -19,7 +19,7 @@ import types
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from hermes_cli.ht_patches import add_run_hook_kwargs
+from hermes_cli.ht_patches import add_run_hook_kwargs, withhold_on_transform_failure
 from hermes_cli.middleware import OBSERVER_SCHEMA_VERSION
 
 logger = logging.getLogger("hermes_cli.plugins")
@@ -311,6 +311,10 @@ class PluginDispatchMixin:
                             failed.append(cb)
                         if fail_closed:  # policy hook: fail closed with a block directive
                             results.append({"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE})
+                        # HT patch P6: a skipped transform withholds the result.
+                        withheld = withhold_on_transform_failure(hook_name, kwargs, "timed out or skipped")
+                        if withheld is not None:
+                            results.append(withheld)
                         continue
                 else:
                     ret = self._invoke_hook_callback(cb, kwargs)
@@ -322,6 +326,9 @@ class PluginDispatchMixin:
                     failed.append(cb)
                 if fail_closed:  # a guard that raised made no decision: same veto as a timeout
                     results.append(_policy_error_block_directive(hook_name, cb, exc))
+                withheld = withhold_on_transform_failure(hook_name, kwargs, type(exc).__name__)  # HT P6
+                if withheld is not None:
+                    results.append(withheld)
         return results
 
     def _report_hook_failure(
@@ -642,12 +649,18 @@ class PluginDispatchMixin:
                 logger.warning("Hook '%s' callback %s timed out after %.0fs", hook_name, callback_name, timeout)
                 if fail_closed:  # policy hook: fail closed with a block directive
                     results.append({"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE})
+                withheld = withhold_on_transform_failure(hook_name, kwargs, "timed out")  # HT P6
+                if withheld is not None:
+                    results.append(withheld)
             except (Exception, SystemExit) as exc:
                 # Same isolation + failure contract as the sync path (#111922 warn-once, #109624
                 # a raising policy guard fails closed).
                 self._report_hook_failure(hook_name, cb, kwargs, exc)
                 if fail_closed:
                     results.append(_policy_error_block_directive(hook_name, cb, exc))
+                withheld = withhold_on_transform_failure(hook_name, kwargs, type(exc).__name__)  # HT P6
+                if withheld is not None:
+                    results.append(withheld)
         return results
 
     def iter_hook_callbacks(self, hook_name: str) -> tuple[Callable, ...]:

@@ -857,9 +857,14 @@ def _apply_transform_tool_result_hook(function_name: str, function_args: dict[st
             hook_results = invoke_hook("transform_tool_result", tool_name=function_name, args=function_args,
                                        result=result, **ids.hook_kwargs(), duration_ms=duration_ms,
                                        status=status, error_type=error_type, error_message=error_message)
-            return next((r for r in hook_results if isinstance(r, str)), result)
+            from hermes_cli.ht_patches import pick_transform_result  # HT patch P6
+            return pick_transform_result(hook_results, result)
     except Exception as _hook_err:
         logger.debug("transform_tool_result hook error: %s", _hook_err)
+        from hermes_cli.ht_patches import withhold_on_transform_error  # HT patch P6
+        withheld = withhold_on_transform_error(function_name, _hook_err)
+        if withheld is not None:
+            return withheld
     return result
 
 
